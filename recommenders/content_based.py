@@ -31,37 +31,32 @@
 import os
 import pandas as pd
 import numpy as np
+import re
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Importing data
-movies = pd.read_csv('resources/data/movies.csv', sep = ',')
-ratings = pd.read_csv('resources/data/ratings.csv')
-movies.dropna(inplace=True)
+movies_df = pd.read_csv('resources/data/movies.csv', sep=',')
 
-def data_preprocessing(subset_size):
-    """Prepare data for use within Content filtering algorithm.
+# Instantiating and generating the count matrix
+tf = TfidfVectorizer(analyzer='word', ngram_range=(1, 2), stop_words='english')
 
-    Parameters
-    ----------
-    subset_size : int
-        Number of movies to use within the algorithm.
-
-    Returns
-    -------
-    Pandas Dataframe
-        Subset of movies selected for content-based filtering.
-
-    """
-    # Split genre data into individual words.
-    movies['keyWords'] = movies['genres'].str.replace('|', ' ')
-    # Subset of the data
-    movies_subset = movies[:subset_size]
-    return movies_subset
 
 # !! DO NOT CHANGE THIS FUNCTION SIGNATURE !!
-# You are, however, encouraged to change its content.  
-def content_model(movie_list,top_n=10):
+# You are, however, encouraged to change its content.
+def clean_title(title):
+    title = re.sub("[^a-zA-Z0-9 ]", "", title)
+    return title
+
+def data_preprocessing(df):
+    # Subset of the data
+    df = df[:27000]
+    df['clean_title'] = df.title.apply(clean_title)
+    df['genres'] = df['genres'].apply(lambda x: x.replace('|', ' '))
+    df['concat'] = (pd.Series(df[['clean_title', 'genres']].values.tolist()).str.join(' '))
+    return df
+
+def content_model(movie_list, top_n=10):
     """Performs Content filtering based upon a list of movies supplied
        by the app user.
 
@@ -78,35 +73,39 @@ def content_model(movie_list,top_n=10):
         Titles of the top-n movie recommendations to the user.
 
     """
-    # Initializing the empty list of recommended movies
-    recommended_movies = []
-    data = data_preprocessing(27000)
-    # Instantiating and generating the count matrix
-    count_vec = CountVectorizer()
-    count_matrix = count_vec.fit_transform(data['keyWords'])
-    indices = pd.Series(data['title'])
-    cosine_sim = cosine_similarity(count_matrix, count_matrix)
-    # Getting the index of the movie that matches the title
-    idx_1 = indices[indices == movie_list[0]].index[0]
-    idx_2 = indices[indices == movie_list[1]].index[0]
-    idx_3 = indices[indices == movie_list[2]].index[0]
-    # Creating a Series with the similarity scores in descending order
-    rank_1 = cosine_sim[idx_1]
-    rank_2 = cosine_sim[idx_2]
-    rank_3 = cosine_sim[idx_3]
-    # Calculating the scores
-    score_series_1 = pd.Series(rank_1).sort_values(ascending = False)
-    score_series_2 = pd.Series(rank_2).sort_values(ascending = False)
-    score_series_3 = pd.Series(rank_3).sort_values(ascending = False)
-    # Getting the indexes of the 10 most similar movies
-    listings = score_series_1.append(score_series_1).append(score_series_3).sort_values(ascending = False)
 
-    # Store movie names
+    # Convenient indexes to map between movie titles and indexes of the 'all_df' dataframe
+    movies = data_preprocessing(movies_df)
+
+    # Produce a feature matrix, where each row corresponds to a movie,
+    # with TF-IDF features as columns
+    tf_enrich_matrix = tf.fit_transform(movies['concat'])
+
+    movies_str = []
+    for title in movie_list:
+        cl_title = clean_title(title)
+        cl_genres = movies_df.loc[movies_df['title'] == title, 'genres']
+        cl_genres = cl_genres.values[0].replace('|', ' ')
+        movie_detail = cl_title + ' ' + cl_genres
+        movies_str.append(movie_detail)
+    titles = ' '.join(movies_str)
+
+    title_comb = clean_title(titles)
+    query_vec = tf.transform([title_comb])
+    similarity = cosine_similarity(query_vec, tf_enrich_matrix).flatten()
+    indices = np.argpartition(similarity, -5)[-15:]
+    results = movies[['clean_title']].iloc[indices].iloc[::-1]
+    results = results.clean_title.to_list()
+
     recommended_movies = []
-    # Appending the names of movies
-    top_50_indexes = list(listings.iloc[1:50].index)
-    # Removing chosen movies
-    top_indexes = np.setdiff1d(top_50_indexes,[idx_1,idx_2,idx_3])
-    for i in top_indexes[:top_n]:
-        recommended_movies.append(list(movies['title'])[i])
+    count = 0
+    for title in results:
+        movies_clean = [clean_title(x) for x in movie_list]
+        if title in movies_clean:
+            pass
+        else:
+            recommended_movies.append(title)
+            count += 1
+        if count == 10:
+            break
     return recommended_movies
